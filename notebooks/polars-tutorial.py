@@ -197,7 +197,8 @@ def _(mo):
 
 @app.cell
 def _():
-    # Try here different data types and see how Polars reacts
+    # Try here different data types and see how Polars reacts$
+
     return
 
 

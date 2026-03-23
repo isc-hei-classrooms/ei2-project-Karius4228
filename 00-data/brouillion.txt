@@ -1,0 +1,39 @@
+SOURCE 1 : Fichier CSV local          SOURCE 2 : InfluxDB distant
+(Oiken, fourni par les profs)         (timeseries.hevs.ch)
+         │                                      │
+         │  pl.read_csv()                       │  requête Flux (HTTP)
+         ▼                                      ▼
+   load_oiken.py                        load_meteo.py
+         │                                      │
+         │  nettoyage minimal                   │  agrégation 15min
+         │  + index UTC continu                 │  + index UTC continu
+         ▼                                      ▼
+oiken_raw.parquet                  meteo_real.parquet
+                                   meteo_pred.parquet
+                    │
+                    ▼
+               clean.py
+          (nettoyage profond)
+                    │
+                    ▼
+             features.py
+         (construction X et Y)
+                    │
+                    ▼
+              modèle ML
+
+
+oiken_raw.parquet   → load : 15 nulls (0.01%)  → interpolation courte
+                    → pv_sion : exclure
+                    → pv_central/sierre/remote : 15 nulls → interpolation courte
+
+meteo_real.parquet  → toutes colonnes : 0.6-0.8% nulls → interpolation courte
+
+meteo_pred.parquet  → 75% nulls structurels (horaire → 15min) → forward fill
+                    → pred_temperature_std : valeurs négatives → exclure
+                    → pred_radiation_std   : à vérifier aussi
+
+décrire les données: grpahiques
+qu'est ce que j'extrait
+comment faire la suite
+digrammes de corélation Irrandiance/PV 
