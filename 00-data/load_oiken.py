@@ -23,7 +23,7 @@ from config import (
     OIKEN_COL_PV_SIERRE, OIKEN_COL_PV_REMOTE,
     COL_TIMESTAMP, COL_LOAD, COL_FORECAST_LOAD,
     COL_PV_CENTRAL, COL_PV_SION, COL_PV_SIERRE, COL_PV_REMOTE,
-    COL_PV_TOTAL, COL_NET_LOAD,
+    COL_PV_TOTAL,
     TIMEZONE, FREQ,
 )
 
@@ -87,13 +87,7 @@ def load_oiken_csv(csv_path: Path | str) -> pl.DataFrame:
     # 4. Tri
     df = df.sort(COL_TIMESTAMP)
 
-    # 5. Colonnes dérivées
-    #    pv_total = somme des 4 zones (null si une zone est null → pas de masquage)
-    #    net_load = load − pv_total (utile comme feature, pas comme cible car unités mixtes)
-    df = df.with_columns(
-        pl.sum_horizontal(*PV_COLS).alias(COL_PV_TOTAL),
-        (pl.col(COL_LOAD) - pl.sum_horizontal(*PV_COLS)).alias(COL_NET_LOAD),
-    )
+   
 
     log.info(f"  → {df.height} lignes | {df[COL_TIMESTAMP].min()} → {df[COL_TIMESTAMP].max()}")
     return df
