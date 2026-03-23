@@ -15,8 +15,8 @@ load_dotenv()
 # ─────────────────────────────────────────────────────────────────────────────
 
 ROOT_DIR      = Path(__file__).resolve().parent
-RAW_OIKEN_DIR = ROOT_DIR
 RAW_DIR       = ROOT_DIR / "data" / "raw"
+RAW_OIKEN_DIR = RAW_DIR  / "oiken"          # ← maintenant après RAW_DIR
 RAW_METEO_DIR = RAW_DIR  / "meteo"
 PROCESSED_DIR = ROOT_DIR / "data" / "processed"
 FEATURES_DIR  = ROOT_DIR / "data" / "features"

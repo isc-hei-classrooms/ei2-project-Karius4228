@@ -7,6 +7,7 @@ __pycache__/
 data/
 containers/
 models/
+scalers/
 
 # Data files (we usually don't want them to be stored in git)
 *.csv
@@ -36,6 +37,7 @@ share/python-wheels/
 MANIFEST
 *.manifest
 *.spec
+*.txt
 
 # Installer logs
 pip-log.txt
