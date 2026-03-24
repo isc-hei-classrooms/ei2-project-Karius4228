@@ -69,7 +69,7 @@ PHYSICAL_BOUNDS = {
 # ══════════════════════════════════════════════════════════════════════════════
 # UTILITAIRES
 # ══════════════════════════════════════════════════════════════════════════════
-
+# ces fonctions sont conçues pour être appliquées à chaque source séparément, avant le merge final.
 def report_nulls(df: pl.DataFrame, label: str):
     log.info(f"\n[{label}] Rapport nulls :")
     for col in df.columns:

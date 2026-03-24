@@ -23,6 +23,7 @@ from pathlib import Path
 import logging
 import sys
 
+# Permet d'importer config.py depuis le même dossier
 sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 from config import (
     RAW_OIKEN_DIR, PROCESSED_DIR,
@@ -34,7 +35,7 @@ from config import (
     COL_PV_LOCAL,
     TIMEZONE, FREQ,
 )
-
+# Note : on importe aussi les noms de colonnes projet (COL_*) pour le renommage
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
@@ -157,7 +158,7 @@ def load_all_oiken(output_name: str = "oiken_raw_v2.parquet") -> pl.DataFrame:
     log.info(f"  → Sauvegardé : {output_path} — {df.shape}")
     return df
 
-
+# Version plus rapide pour recharger depuis le Parquet déjà nettoyé
 def load_oiken_parquet(filename: str = "oiken_raw_v2.parquet") -> pl.DataFrame:
     """Recharge depuis le Parquet."""
     path = PROCESSED_DIR / filename
@@ -167,7 +168,7 @@ def load_oiken_parquet(filename: str = "oiken_raw_v2.parquet") -> pl.DataFrame:
     log.info(f"Oiken chargé — {df.shape}")
     return df
 
-
+# Exemple d'utilisation : chargement complet + stats
 if __name__ == "__main__":
     df = load_all_oiken()
 
