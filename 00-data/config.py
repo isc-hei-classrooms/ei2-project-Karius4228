@@ -2,6 +2,10 @@
 config.py — Configuration centrale du projet Energy Informatics 2
 Auteur : Marius Fabbri
 Date   : 2026
+
+v2 : Séparation PV local (central+sierre, dispo ~15min) vs PV remote (dispo J+1 2h)
+     Suppression de pv_total (plus pertinent avec des disponibilités différentes)
+     Exclusion de pv_sion (données trop bruitées)
 """
 
 from pathlib import Path
@@ -16,7 +20,7 @@ load_dotenv()
 
 ROOT_DIR      = Path(__file__).resolve().parent
 RAW_DIR       = ROOT_DIR / "data" / "raw"
-RAW_OIKEN_DIR = RAW_DIR  / "oiken"          # ← maintenant après RAW_DIR
+RAW_OIKEN_DIR = RAW_DIR  / "oiken"
 RAW_METEO_DIR = RAW_DIR  / "meteo"
 PROCESSED_DIR = ROOT_DIR / "data" / "processed"
 FEATURES_DIR  = ROOT_DIR / "data" / "features"
@@ -39,6 +43,17 @@ HORIZON_ID = 12    # Intra-Day  : 3h  × 4 = 12 pas
 HORIZON_IQ = 4     # Intra-QH   : 1h  × 4 = 4  pas
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DÉLAIS DE DISPONIBILITÉ DES DONNÉES (en pas de 15 min)
+# ─────────────────────────────────────────────────────────────────────────────
+# Ces constantes documentent quand chaque source est réellement disponible.
+# Elles sont utilisées dans les features pour éviter le leakage.
+
+PV_LOCAL_DELAY  = 1     # PV local (central+sierre) : dispo ~15 min après → shift(1)
+PV_REMOTE_DELAY = 96    # PV remote : dispo le lendemain à 2h → shift(96) min
+LOAD_DELAY      = 96    # Charge Oiken : dispo le lendemain à 2h → shift(96) min
+METEO_DELAY     = 4     # Mesures météo : dispo ~1h après → shift(4)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # COLONNES BRUTES CSV OIKEN
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -58,17 +73,20 @@ COL_TIMESTAMP       = "timestamp"
 
 # Charge Oiken
 COL_LOAD            = "load"              # variable cible Y (déjà normalisée)
-COL_FORECAST_LOAD   = "forecast_load"     # prévision Oiken (feature dans X)
+COL_FORECAST_LOAD   = "forecast_load"     # prévision Oiken (benchmark, pas feature)
 
-# Production PV par zone
+# Production PV par zone (colonnes individuelles, gardées pour traçabilité)
 COL_PV_CENTRAL      = "pv_central_kwh"
-COL_PV_SION         = "pv_sion_kwh"      # exclue après nettoyage (capteur dégradé)
+COL_PV_SION         = "pv_sion_kwh"      # EXCLUE : données trop bruitées
 COL_PV_SIERRE       = "pv_sierre_kwh"
-COL_PV_REMOTE       = "pv_remote_kwh"
-COL_PV_TOTAL        = "pv_total_kwh"     # somme des 3 zones fiables
-COL_NET_LOAD        = "net_load"
+COL_PV_REMOTE       = "pv_remote_kwh"    # dispo le lendemain à 2h
 
-# ── Mesures météo réelles (disponibles en J-1 comme lags) ────────────────────
+# Agrégats PV (v2 : séparation par disponibilité)
+COL_PV_LOCAL        = "pv_local_kwh"     # central + sierre — dispo ~15 min après
+# NOTE : pv_total n'existe plus (remplacé par pv_local + pv_remote séparés)
+# NOTE : net_load supprimé (combinaison linéaire de la cible → leakage)
+
+# ── Mesures météo réelles (dispo avec ~1h de délai) ──────────────────────────
 COL_TEMP            = "temperature_c"      # T_2M
 COL_GLOB            = "radiation_wm2"      # GLOB
 COL_PRECIP          = "precipitation_mm"   # TOT_PREC
@@ -76,12 +94,11 @@ COL_HUMIDITY        = "humidity_pct"       # RELHUM_2M
 COL_SUNSHINE        = "sunshine_min"       # DURSUN
 COL_WIND_SPEED      = "wind_speed_ms"      # FF_10M
 
-# ── Prévisions NWP (disponibles avant gate closure J+1) ──────────────────────
-# _ctrl = valeur centrale, _std = incertitude, _q10/_q90 = fourchette
+# ── Prévisions NWP (publiées toutes les 3h, couvrant 48h) ────────────────────
 COL_PRED_TEMP_CTRL  = "pred_temperature_ctrl"
-COL_PRED_TEMP_STD   = "pred_temperature_std"
+COL_PRED_TEMP_STD   = "pred_temperature_std"    # EXCLU : données corrompues
 COL_PRED_GLOB_CTRL  = "pred_radiation_ctrl"
-COL_PRED_GLOB_STD   = "pred_radiation_std"
+COL_PRED_GLOB_STD   = "pred_radiation_std"      # EXCLU : données corrompues
 COL_PRED_PREC_CTRL  = "pred_precipitation_ctrl"
 COL_PRED_WIND_CTRL  = "pred_wind_ctrl"
 COL_PRED_WIND_STD   = "pred_wind_std"
@@ -90,7 +107,6 @@ COL_PRED_HUM_CTRL   = "pred_humidity_ctrl"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAPPING INFLUXDB — measurements réels
-# clé = nom colonne projet, valeur = nom exact du measurement dans InfluxDB
 # ─────────────────────────────────────────────────────────────────────────────
 
 INFLUX_MEASUREMENTS_REAL = {
@@ -102,9 +118,6 @@ INFLUX_MEASUREMENTS_REAL = {
     COL_WIND_SPEED: "Wind speed scalar (ten minutes mean)",
 }
 
-# ── Mapping prévisions NWP ────────────────────────────────────────────────────
-# Chaque variable NWP a 4 measurements : ctrl, q10, q90, stde
-# On récupère ctrl (valeur centrale) et stde (incertitude)
 INFLUX_MEASUREMENTS_PRED = {
     COL_PRED_TEMP_CTRL : "PRED_T_2M_ctrl",
     COL_PRED_TEMP_STD  : "PRED_T_2M_stde",
@@ -137,6 +150,3 @@ MAX_INTERP_STEPS = 4      # max 4 pas consécutifs interpolés = 1 heure
 IQR_FACTOR       = 5.0    # seuil outlier : médiane ± 5 × IQR
 TRAIN_RATIO      = 0.70   # 70% train, 30% test — split chronologique
 METRICS          = ["MAE", "RMSE", "MAPE"]
-
-
-

@@ -4,8 +4,12 @@ clean.py — Nettoyage des données brutes (Oiken, météo réelle, NWP)
 Applique 5 étapes de nettoyage sur chaque source :
   outliers IQR → bornes physiques → interpolation courte → flags trous longs
 
-Entrée  : data/processed/*_raw.parquet (ou meteo_real/pred.parquet)
-Sortie  : data/processed/*_clean.parquet
+v2 : Adapté à la séparation pv_local / pv_remote
+     - pv_total et net_load supprimés
+     - pv_sion déjà exclu dans load_oiken.py
+
+Entrée  : data/processed/*_raw_v2.parquet (ou meteo_real/pred.parquet)
+Sortie  : data/processed/*_clean_v2.parquet
 
 Auteur : Marius Fabbri
 """
@@ -19,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
 from config import (
     PROCESSED_DIR, COL_TIMESTAMP,
     COL_LOAD, COL_FORECAST_LOAD,
-    COL_PV_CENTRAL, COL_PV_SION, COL_PV_SIERRE, COL_PV_REMOTE,
-    COL_PV_TOTAL, COL_NET_LOAD,
+    COL_PV_CENTRAL, COL_PV_SIERRE, COL_PV_REMOTE,
+    COL_PV_LOCAL,
     COL_TEMP, COL_GLOB, COL_PRECIP, COL_HUMIDITY, COL_SUNSHINE, COL_WIND_SPEED,
     COL_PRED_TEMP_CTRL, COL_PRED_TEMP_STD,
     COL_PRED_GLOB_CTRL, COL_PRED_GLOB_STD,
@@ -32,7 +36,7 @@ from config import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-# Colonnes NWP corrompues (écart-types négatifs) → exclues
+# Colonnes NWP corrompues → exclues
 NWP_COLS_TO_DROP = [COL_PRED_TEMP_STD, COL_PRED_GLOB_STD]
 
 NWP_COLS_VALID = [
@@ -40,12 +44,13 @@ NWP_COLS_VALID = [
     COL_PRED_WIND_CTRL, COL_PRED_WIND_STD, COL_PRED_SUN_CTRL, COL_PRED_HUM_CTRL,
 ]
 
-# Bornes physiques absolues : (min, max) — None = pas de borne
+# Bornes physiques absolues
 PHYSICAL_BOUNDS = {
     COL_LOAD:           (None, None),
     COL_PV_CENTRAL:     (0, None),
     COL_PV_SIERRE:      (0, None),
     COL_PV_REMOTE:      (0, None),
+    COL_PV_LOCAL:       (0, None),
     COL_TEMP:           (-40, 50),
     COL_GLOB:           (0, 1400),
     COL_PRECIP:         (0, None),
@@ -66,7 +71,6 @@ PHYSICAL_BOUNDS = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 def report_nulls(df: pl.DataFrame, label: str):
-    """Affiche nulls par colonne + plus long trou consécutif (via RLE)."""
     log.info(f"\n[{label}] Rapport nulls :")
     for col in df.columns:
         if col == COL_TIMESTAMP:
@@ -81,7 +85,6 @@ def report_nulls(df: pl.DataFrame, label: str):
 
 
 def remove_outliers(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
-    """Outliers IQR × 5 → null. Facteur 5 car les séries ont des pointes légitimes."""
     exprs = []
     for col in [c for c in columns if c in df.columns]:
         s = df[col].drop_nulls()
@@ -101,7 +104,6 @@ def remove_outliers(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
 
 
 def apply_physical_bounds(df: pl.DataFrame) -> pl.DataFrame:
-    """Valeurs hors bornes physiques → null (indépendant des stats)."""
     exprs = []
     for col, (lo, hi) in PHYSICAL_BOUNDS.items():
         if col not in df.columns:
@@ -116,22 +118,14 @@ def apply_physical_bounds(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def interpolate_short_gaps(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
-    """
-    Interpole linéairement les trous ≤ MAX_INTERP_STEPS (4 pas = 1h).
-    Les trous plus longs restent null (flaggés ensuite).
-    """
     for col in [c for c in columns if c in df.columns]:
         if df[col].null_count() == 0:
             continue
-
-        # RLE pour mesurer la longueur de chaque trou
         is_null = df[col].is_null()
         rle = is_null.cast(pl.Int32).rle()
         lengths = rle.struct.field("len").to_list()
         values = rle.struct.field("value").to_list()
         gap_lens = pl.Series("gap_len", [l for l, v in zip(lengths, values) for _ in range(l)])
-
-        # N'interpole que les trous courts
         short_mask = is_null & (gap_lens <= MAX_INTERP_STEPS)
         interp = df[col].interpolate(method="linear")
         df = df.with_columns(
@@ -141,7 +135,6 @@ def interpolate_short_gaps(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame
 
 
 def flag_long_gaps(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
-    """Ajoute {col}_gap = True là où un null persiste après interpolation."""
     flags = [pl.col(col).is_null().alias(f"{col}_gap")
              for col in columns if col in df.columns]
     return df.with_columns(flags) if flags else df
@@ -151,28 +144,40 @@ def flag_long_gaps(df: pl.DataFrame, columns: list[str]) -> pl.DataFrame:
 # NETTOYAGE PAR SOURCE
 # ══════════════════════════════════════════════════════════════════════════════
 
-def clean_oiken(df: pl.DataFrame, output_name: str = "oiken_clean.parquet") -> pl.DataFrame:
-    """Nettoyage Oiken : exclut pv_sion, recalcule pv_total, chaîne standard."""
-    log.info("\n" + "═"*60 + "\nNETTOYAGE OIKEN\n" + "═"*60)
+def clean_oiken(df: pl.DataFrame, output_name: str = "oiken_clean_v2.parquet") -> pl.DataFrame:
+    """
+    Nettoyage Oiken v2.
 
-    cols = [COL_LOAD, COL_FORECAST_LOAD, COL_PV_CENTRAL, COL_PV_SIERRE,
-            COL_PV_REMOTE, COL_PV_TOTAL, COL_NET_LOAD]
+    Changements vs v1 :
+      - pv_sion déjà exclu dans load_oiken.py
+      - pv_total supprimé (pas d'agrégation de sources aux dispos différentes)
+      - net_load supprimé (combinaison linéaire de la cible → leakage)
+      - On nettoie pv_local (central+sierre) comme agrégat
+      - On nettoie pv_remote séparément
+      - Après nettoyage des composantes, on recalcule pv_local proprement
+    """
+    log.info("\n" + "═"*60 + "\nNETTOYAGE OIKEN (v2)\n" + "═"*60)
 
-    # Exclusion pv_sion (capteur dégradé) + recalcul pv_total sur 3 zones
-    if COL_PV_SION in df.columns:
-        df = df.drop(COL_PV_SION)
-    df = df.with_columns(
-        pl.sum_horizontal(COL_PV_CENTRAL, COL_PV_SIERRE, COL_PV_REMOTE).alias(COL_PV_TOTAL),
-        (pl.col(COL_LOAD) - pl.sum_horizontal(COL_PV_CENTRAL, COL_PV_SIERRE, COL_PV_REMOTE)).alias(COL_NET_LOAD),
-    )
+    # Colonnes à nettoyer (individuelles, pas l'agrégat pv_local)
+    cols_individual = [COL_LOAD, COL_FORECAST_LOAD,
+                       COL_PV_CENTRAL, COL_PV_SIERRE, COL_PV_REMOTE]
 
-    # Chaîne standard
     report_nulls(df, "Oiken brut")
-    df = remove_outliers(df, cols)
+    df = remove_outliers(df, cols_individual)
     df = apply_physical_bounds(df)
-    df = interpolate_short_gaps(df, cols)
-    df = flag_long_gaps(df, cols)
-    report_nulls(df, "Oiken nettoyé")
+    df = interpolate_short_gaps(df, cols_individual)
+
+    # Recalculer pv_local après nettoyage des composantes
+    df = df.with_columns(
+        pl.sum_horizontal(COL_PV_CENTRAL, COL_PV_SIERRE).alias(COL_PV_LOCAL),
+    )
+    log.info("  → pv_local_kwh recalculé après nettoyage des composantes")
+
+    # Flags sur les colonnes finales
+    cols_flag = [COL_LOAD, COL_FORECAST_LOAD,
+                 COL_PV_CENTRAL, COL_PV_SIERRE, COL_PV_REMOTE, COL_PV_LOCAL]
+    df = flag_long_gaps(df, cols_flag)
+    report_nulls(df, "Oiken nettoyé (v2)")
 
     path = PROCESSED_DIR / output_name
     df.write_parquet(path)
@@ -181,7 +186,7 @@ def clean_oiken(df: pl.DataFrame, output_name: str = "oiken_clean.parquet") -> p
 
 
 def clean_meteo_real(df: pl.DataFrame, output_name: str = "meteo_real_clean.parquet") -> pl.DataFrame:
-    """Nettoyage météo réelle : chaîne standard + correction nocturne radiation."""
+    """Nettoyage météo réelle (inchangé vs v1)."""
     log.info("\n" + "═"*60 + "\nNETTOYAGE MÉTÉO RÉELLE\n" + "═"*60)
 
     cols = [c for c in [COL_TEMP, COL_GLOB, COL_PRECIP, COL_HUMIDITY, COL_SUNSHINE, COL_WIND_SPEED]
@@ -191,7 +196,6 @@ def clean_meteo_real(df: pl.DataFrame, output_name: str = "meteo_real_clean.parq
     df = remove_outliers(df, cols)
     df = apply_physical_bounds(df)
 
-    # Radiation et ensoleillement nocturnes (21h-5h UTC) → 0
     hour = df[COL_TIMESTAMP].dt.hour()
     is_night = (hour >= 21) | (hour <= 5)
     night_exprs = [pl.when(is_night).then(0.0).otherwise(pl.col(c)).alias(c)
@@ -210,19 +214,15 @@ def clean_meteo_real(df: pl.DataFrame, output_name: str = "meteo_real_clean.parq
 
 
 def clean_meteo_pred(df: pl.DataFrame, output_name: str = "meteo_pred_clean.parquet") -> pl.DataFrame:
-    """Nettoyage NWP : exclut std corrompus, forward fill 3 pas, flags."""
+    """Nettoyage NWP (inchangé vs v1)."""
     log.info("\n" + "═"*60 + "\nNETTOYAGE PRÉVISIONS NWP\n" + "═"*60)
 
-    # Exclusion colonnes std corrompues (valeurs négatives)
     df = df.drop([c for c in NWP_COLS_TO_DROP if c in df.columns])
     valid = [c for c in NWP_COLS_VALID if c in df.columns]
 
     report_nulls(df, "NWP brut")
     df = apply_physical_bounds(df)
-
-    # Forward fill (limit=3) : propage la prévision horaire sur 3 quarts d'heure
     df = df.with_columns([pl.col(c).forward_fill(limit=3).alias(c) for c in valid])
-
     df = flag_long_gaps(df, valid)
     report_nulls(df, "NWP nettoyé")
 
@@ -239,9 +239,9 @@ def clean_meteo_pred(df: pl.DataFrame, output_name: str = "meteo_pred_clean.parq
 def run_all_cleaning() -> tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame]:
     """Nettoie les 3 sources depuis les Parquets bruts."""
     sources = {
-        "oiken":      ("oiken_raw.parquet",  clean_oiken),
-        "meteo_real": ("meteo_real.parquet",  clean_meteo_real),
-        "meteo_pred": ("meteo_pred.parquet",  clean_meteo_pred),
+        "oiken":      ("oiken_raw_v2.parquet", clean_oiken),
+        "meteo_real": ("meteo_real.parquet",    clean_meteo_real),
+        "meteo_pred": ("meteo_pred.parquet",    clean_meteo_pred),
     }
     results = {}
     for key, (filename, clean_fn) in sources.items():
