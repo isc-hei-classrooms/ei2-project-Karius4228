@@ -15,6 +15,7 @@ scalers/
 *.xls
 *.json
 *.zip
+check_leakage.py
 
 # Distribution / packaging
 .Python
