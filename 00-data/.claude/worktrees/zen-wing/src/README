@@ -1,0 +1,69 @@
+# Python `src/` Directory Structure
+
+## Modules vs Packages
+
+- **Module**: A single `.py` file. E.g., `utils.py`.
+- **Package**: A directory containing an `__init__.py` file (can be empty). It groups
+  related modules together. E.g., `data/` with `__init__.py` inside it.
+
+## Example Layout
+
+Below is a _possible_ layout for a project that forecasts energy prices and PV production.
+
+```
+src/
+├── config.py               # API keys, file paths, model hyperparameters
+│
+├── data/                   # Data acquisition & preprocessing
+│   ├── __init__.py
+│   ├── fetch_prices.py     # Pull spot/day-ahead prices 
+│   ├── fetch_weather.py    # Pull irradiance & weather data
+│   ├── fetch_pv.py         # Pull historical PV production 
+│   └── preprocess.py       # Cleaning, resampling, feature engineering
+│
+├── models/                 # Training & inference
+│   ├── __init__.py
+│   ├── price_model.py      # Energy price forecasting model
+│   └── pv_model.py         # PV production forecasting model
+│
+└── visualization/          # Plotting & dashboards
+    ├── __init__.py
+    ├── plots.py            # Reusable plotting functions (matplotlib/plotly)
+    └── dashboard.py        # Interactive dashboard (e.g., Streamlit, Panel)
+```
+
+### What goes where
+
+| Package          | Responsibility                                      |
+|------------------|-----------------------------------------------------|
+| `data/`          | Fetching raw data from APIs/files, cleaning it, building feature matrices |
+| `models/`        | Defining, training, saving/loading, and running inference with ML models |
+| `visualization/` | All plotting code — static figures and interactive dashboards |
+| `config.py`      | Central place for constants: API endpoints, file paths, hyperparameters |
+
+## Naming Conventions
+
+| What                  | Convention         | Example                    |
+|-----------------------|--------------------|----------------------------|
+| Packages & modules    | `snake_case`, short, noun-ish | `fetch_prices.py`, `models/` |
+| Classes               | `PascalCase`       | `class PriceForecaster`    |
+| Functions / variables | `snake_case`       | `def fetch_day_ahead()`    |
+| Constants             | `UPPER_SNAKE_CASE` | `ENTSOE_API_URL = "..."`   |
+
+## Where to Put What
+
+- **One concept per module.** If `fetch_prices.py` starts containing weather logic too,
+  split it out.
+- **Group by stage of the pipeline** (data → models → visualization). This maps
+  naturally to the workflow: acquire data, train/predict, then plot results.
+- **`__init__.py`** controls what `from data import X` exposes. Keep it minimal —
+  re-export the public API, nothing more.
+- **`src/` wrapper** exists so that your installed package is always imported from the
+  built distribution, never accidentally from the working directory. It's a best practice
+  defined in the Python Packaging Guide (src-layout vs flat-layout).
+
+## The Key Rule
+
+If you're unsure where something goes: name it after what it does, put it near the code
+that uses it, and refactor later when a clear pattern emerges. Premature structure is
+worse than a slightly messy flat layout.

@@ -15,15 +15,7 @@ scalers/
 *.xls
 *.json
 *.zip
-
-# Local devlopping scripts
 check_leakage.py
-normalize_intraday.py
-normalize_da.py
-model_da.py
-model_intraday.py
-baseline.py
-
 
 # Distribution / packaging
 .Python

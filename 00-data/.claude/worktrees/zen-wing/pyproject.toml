@@ -1,0 +1,43 @@
+[project]
+name = "energy-informatics-ii"
+version = "0.1.0"
+description = "Energy Infromatics II"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "marimo>=0.19.11",
+    "pandas>=3.0.0",
+    "polars>=1.29.0",
+    "pre-commit>=4.2.0",
+    "pyarrow>=23.0.0",
+    "pyright>=1.1.400",
+    "pyzmq>=27.1.0",
+    "ruff>=0.11.10",
+]
+
+# Set curent project as a package, with src/ folder.
+[tool.uv]
+package = true
+
+# Longer than standard 79 char max line length.
+[tool.ruff]
+line-length = 99
+
+[tool.ruff.lint]
+extend-select = [
+  "E501", # enforce the line-too-long rule
+  "UP",  # pyupgrade
+  "D",   # pydocstyle
+]
+
+# Docstring style numpy (instead of Google).
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+# Set ruff as only a local deps for development.
+[dependency-groups]
+dev = [
+    "ruff>=0.11.10",
+    "pre-commit>=4.2.0",
+    "pyright>=1.1.400",
+]
