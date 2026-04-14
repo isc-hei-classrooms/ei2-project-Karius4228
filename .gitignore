@@ -8,6 +8,8 @@ data/
 containers/
 models/
 scalers/
+models_saved/
+
 
 # Data files (we usually don't want them to be stored in git)
 *.csv
@@ -18,11 +20,14 @@ scalers/
 
 # Local devlopping scripts
 check_leakage.py
-normalize_intraday.py
-normalize_da.py
-model_da.py
-model_intraday.py
-baseline.py
+brouillion.py
+compare_models_da.py
+compare_models_intraday.py
+finalize_rf_intraday.py
+finalize_intraday_comparison.py
+resume_rf_intraday.py
+GUIDE_V3.md
+
 
 
 # Distribution / packaging
