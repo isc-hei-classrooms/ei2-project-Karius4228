@@ -20,14 +20,11 @@ models_saved/
 
 # Local devlopping scripts
 check_leakage.py
-brouillion.py
-compare_models_da.py
-compare_models_intraday.py
-finalize_rf_intraday.py
-finalize_intraday_comparison.py
-resume_rf_intraday.py
-GUIDE_V3.md
-
+normalize_intraday.py
+normalize_da.py
+model_da.py
+model_intraday.py
+baseline.py
 
 
 # Distribution / packaging
