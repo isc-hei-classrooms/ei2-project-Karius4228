@@ -18,11 +18,7 @@ scalers/
 
 # Local devlopping scripts
 check_leakage.py
-normalize_intraday.py
-normalize_da.py
-model_da.py
-model_intraday.py
-baseline.py
+brouillion.py
 
 
 # Distribution / packaging
