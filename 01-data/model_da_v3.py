@@ -1,14 +1,7 @@
 """
 model_da_v3.py — Modèles XGBoost + LightGBM Day-Ahead (v3)
 ────────────────────────────────────────────────────────────
-Utilise les features v3 (shifts temporels corrigés).
-
-Pipeline :
-  1. Charge train_da_v3 / test_da_v3
-  2. Baselines : Naïf J-1 + Oiken (correctement aligné)
-  3. XGBoost + LightGBM (RandomizedSearchCV + TimeSeriesSplit)
-  4. Tableau comparatif + Feature importance
-  5. Sauvegarde modèles / params / métriques
+Inclut le nettoyage automatique des prévisions Oiken corrompues.
 
 Auteur : Marius Fabbri
 """
@@ -23,15 +16,16 @@ import xgboost as xgb
 import lightgbm as lgb
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[0]))
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
 from features_da_v3 import get_feature_columns
+from clean_forecast import detect_frozen_forecast, filter_frozen_days
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-# ─── Config ───────────────────────────────────────────────────────────────────
-FEATURES_DIR = Path(__file__).resolve().parent / "data" / "processed" / "features_v3"
-MODELS_DIR   = Path(__file__).resolve().parent / "models_saved"
+FEATURES_DIR = SCRIPT_DIR / "data" / "processed" / "features_v3"
+MODELS_DIR   = SCRIPT_DIR / "models_saved"
 
 N_ITER       = 40
 CV_FOLDS     = 5
@@ -61,9 +55,7 @@ LGB_PARAM_GRID = {
 }
 
 
-# ─── Métriques ────────────────────────────────────────────────────────────────
-
-def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+def compute_metrics(y_true, y_pred):
     valid = ~(np.isnan(y_true) | np.isnan(y_pred))
     yt, yp = y_true[valid], y_pred[valid]
     mae  = float(np.mean(np.abs(yt - yp)))
@@ -73,40 +65,42 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     return {"MAE": mae, "RMSE": rmse, "MAPE": mape, "n": int(valid.sum())}
 
 
-# ─── Pipeline ─────────────────────────────────────────────────────────────────
-
 def run_model_da():
     log.info("=" * 60)
-    log.info("MODÈLES DAY-AHEAD (v3 — shifts temporels corrigés)")
+    log.info("MODÈLES DAY-AHEAD (v3)")
     log.info("=" * 60)
 
-    # ── 1. Chargement ─────────────────────────────────────────────────────
+    # ── Chargement ──
     df_train = pl.read_parquet(FEATURES_DIR / "train_da_v3.parquet")
     df_test  = pl.read_parquet(FEATURES_DIR / "test_da_v3.parquet")
     log.info(f"Train: {df_train.shape} | Test: {df_test.shape}")
 
+    # ── Nettoyage Oiken (exclure prévisions figées) ──
+    suspect_dates = detect_frozen_forecast(df_test, "forecast_load")
+    df_test_clean = filter_frozen_days(df_test, suspect_dates)
+
+    # ── Features ──
     feature_cols = get_feature_columns(df_train)
     log.info(f"{len(feature_cols)} features")
 
     X_train = df_train.select(feature_cols).to_numpy().astype(np.float32)
     y_train = df_train["target"].to_numpy().astype(np.float32)
-    X_test  = df_test.select(feature_cols).to_numpy().astype(np.float32)
-    y_test  = df_test["target"].to_numpy().astype(np.float32)
+    X_test  = df_test_clean.select(feature_cols).to_numpy().astype(np.float32)
+    y_test  = df_test_clean["target"].to_numpy().astype(np.float32)
 
     all_metrics = {}
 
-    # ── 2. Baseline naïve J-1 ─────────────────────────────────────────────
-    y_naive = df_test["load_lag_1d"].to_numpy()
+    # ── Baselines ──
+    y_naive = df_test_clean["load_lag_1d"].to_numpy()
     all_metrics["Naïf J-1"] = compute_metrics(y_test, y_naive)
 
-    # ── 3. Benchmark Oiken (correctement aligné) ─────────────────────────
-    y_oiken = df_test["forecast_load_target"].to_numpy()
+    y_oiken = df_test_clean["forecast_load_target"].to_numpy()
     all_metrics["Oiken"] = compute_metrics(y_test, y_oiken)
 
-    log.info(f"Naïf J-1:  MAE={all_metrics['Naïf J-1']['MAE']:.4f}")
-    log.info(f"Oiken:     MAE={all_metrics['Oiken']['MAE']:.4f}")
+    log.info(f"Naïf:  MAE={all_metrics['Naïf J-1']['MAE']:.4f}")
+    log.info(f"Oiken: MAE={all_metrics['Oiken']['MAE']:.4f}")
 
-    # ── 4. XGBoost ────────────────────────────────────────────────────────
+    # ── XGBoost ──
     log.info(f"\n── XGBoost ({N_ITER} iter, {CV_FOLDS} folds) ──")
     tscv = TimeSeriesSplit(n_splits=CV_FOLDS)
     t0 = time.time()
@@ -123,7 +117,7 @@ def run_model_da():
     all_metrics["XGBoost"] = compute_metrics(y_test, y_xgb)
     log.info(f"  CV MAE: {-xgb_search.best_score_:.4f} | Test MAE: {all_metrics['XGBoost']['MAE']:.4f} ({time.time()-t0:.0f}s)")
 
-    # ── 5. LightGBM ──────────────────────────────────────────────────────
+    # ── LightGBM ──
     log.info(f"\n── LightGBM ({N_ITER} iter, {CV_FOLDS} folds) ──")
     t0 = time.time()
 
@@ -139,7 +133,7 @@ def run_model_da():
     all_metrics["LightGBM"] = compute_metrics(y_test, y_lgb)
     log.info(f"  CV MAE: {-lgb_search.best_score_:.4f} | Test MAE: {all_metrics['LightGBM']['MAE']:.4f} ({time.time()-t0:.0f}s)")
 
-    # ── 6. Tableau comparatif ─────────────────────────────────────────────
+    # ── Tableau ──
     oiken_mae = all_metrics["Oiken"]["MAE"]
     log.info("\n" + "=" * 70)
     log.info(f"  {'Modèle':<20} {'MAE':>8}  {'RMSE':>8}  {'MAPE':>8}  {'vs Oiken':>10}")
@@ -150,18 +144,17 @@ def run_model_da():
         log.info(f"  {label:<20} {m['MAE']:>8.4f}  {m['RMSE']:>8.4f}  {mape_s:>8}  {vs:>10}")
     log.info("=" * 70)
 
-    # ── 7. Feature importance ─────────────────────────────────────────────
+    # ── Feature importance ──
     booster = xgb_search.best_estimator_.get_booster()
     scores = booster.get_score(importance_type="gain")
     fname_map = {f"f{i}": name for i, name in enumerate(feature_cols)}
     named_scores = {fname_map.get(k, k): v for k, v in scores.items()}
-    log.info("\n── Top 15 features XGBoost (gain) ──")
+    log.info("\n── Top 15 features (gain) ──")
     for rank, (name, score) in enumerate(sorted(named_scores.items(), key=lambda x: -x[1])[:15], 1):
         log.info(f"  {rank:2d}. {name:<40} {score:>10.1f}")
 
-    # ── 8. Sauvegarde ─────────────────────────────────────────────────────
+    # ── Sauvegarde ──
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-
     joblib.dump(xgb_search.best_estimator_, MODELS_DIR / "xgb_da_v3.joblib")
     joblib.dump(lgb_search.best_estimator_, MODELS_DIR / "lgb_da_v3.joblib")
 
@@ -172,17 +165,15 @@ def run_model_da():
     with open(MODELS_DIR / "da_v3_lgb_params.json", "w") as f:
         json.dump(lgb_search.best_params_, f, indent=2)
 
-    # Prédictions pour visualisation
     joblib.dump({
         "y_test": y_test, "y_naive": y_naive, "y_oiken": y_oiken,
         "y_xgb": y_xgb, "y_lgb": y_lgb,
-        "timestamps": df_test["timestamp"].to_list(),
-        "results": all_metrics,
-        "feature_cols": feature_cols,
+        "timestamps": df_test_clean["timestamp"].to_list(),
+        "results": all_metrics, "feature_cols": feature_cols,
         "xgb_importance": named_scores,
     }, MODELS_DIR / "da_v3_predictions.joblib")
 
-    log.info(f"\n✓ Modèles sauvegardés dans {MODELS_DIR}")
+    log.info(f"\n✓ Sauvegardé dans {MODELS_DIR}")
     return all_metrics
 
 
